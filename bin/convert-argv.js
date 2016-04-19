@@ -3,6 +3,7 @@ var fs = require("fs");
 fs.existsSync = fs.existsSync || path.existsSync;
 var resolve = require("enhanced-resolve");
 var interpret = require("interpret");
+var WebpackOptionsDefaulter = require("../lib/WebpackOptionsDefaulter");
 
 module.exports = function(optimist, argv, convertOptions) {
 
@@ -21,16 +22,16 @@ module.exports = function(optimist, argv, convertOptions) {
 		if(!argv.devtool) {
 			argv.devtool = "eval-cheap-module-source-map";
 		}
-		argv["define"] = argv["define"].concat("process.env.NODE_ENV=\"production\"");
 	}
 	if(argv.p) {
 		argv["optimize-minimize"] = true;
+		argv["define"] = [].concat(argv["define"] || []).concat("process.env.NODE_ENV=\"production\"");
 	}
 
 	var configFileLoaded = false;
 	var configPath, ext;
 	var extensions = Object.keys(interpret.extensions).sort(function(a, b) {
-		return a.length - b.length;
+		return a === '.js' ? -1 : b === '.js' ? 1 : a.length - b.length;
 	});
 	var configFiles = ["webpack.config", "webpackfile"].map(function(filename) {
 		return extensions.map(function(ext) {
@@ -43,9 +44,10 @@ module.exports = function(optimist, argv, convertOptions) {
 		return a.concat(i);
 	}, []);
 
+	var i;
 	if(argv.config) {
 		configPath = path.resolve(argv.config);
-		for(var i = extensions.length - 1; i >= 0; i--) {
+		for(i = extensions.length - 1; i >= 0; i--) {
 			var tmpExt = extensions[i];
 			if(configPath.indexOf(tmpExt, configPath.length - tmpExt.length) > -1) {
 				ext = tmpExt;
@@ -56,7 +58,7 @@ module.exports = function(optimist, argv, convertOptions) {
 			ext = path.extname(configPath);
 		}
 	} else {
-		for(var i = 0; i < configFiles.length; i++) {
+		for(i = 0; i < configFiles.length; i++) {
 			var webpackConfig = configFiles[i].path;
 			if(fs.existsSync(webpackConfig)) {
 				ext = configFiles[i].ext;
@@ -92,15 +94,20 @@ module.exports = function(optimist, argv, convertOptions) {
 		configFileLoaded = true;
 	}
 
-	if(typeof options === "function") {
+	var isES6DefaultExportedFunc = (
+		typeof options === "object" && options !== null && typeof options.default === "function"
+	);
+
+	if(typeof options === "function" || isES6DefaultExportedFunc) {
+		options = isES6DefaultExportedFunc ? options.default : options;
 		options = options(argv.env, argv);
 	}
 
 	return processConfiguredOptions(options);
 
 	function processConfiguredOptions(options) {
-		if(typeof options !== "object" || options === null) {
-			console.log("Config did not export an object or a function returning an object.");
+		if(options === null || typeof options !== "object") {
+			console.error("Config did not export an object or a function returning an object.");
 			process.exit(-1); // eslint-disable-line
 		}
 
@@ -110,8 +117,8 @@ module.exports = function(optimist, argv, convertOptions) {
 		}
 
 		// process ES6 default
-		if(typeof options === "object" && typeof options["default"] === "object") {
-			return processConfiguredOptions(options["default"]);
+		if(typeof options === "object" && typeof options.default === "object") {
+			return processConfiguredOptions(options.default);
 		}
 
 		if(Array.isArray(options)) {
@@ -128,24 +135,7 @@ module.exports = function(optimist, argv, convertOptions) {
 		}
 
 		if(argv.watch) {
-			// TODO remove this in next major version
-			if(options.watch && typeof options.watch === "object") {
-				console.warn("options.watch is deprecated: Use 'options.watchOptions' instead");
-				options.watchOptions = options.watch;
-			}
-			// TODO remove this in next major version
-			if(options.watchDelay) {
-				console.warn("options.watchDelay is deprecated: Use 'options.watchOptions.aggregateTimeout' instead");
-				options.watchOptions = options.watchOptions || {};
-				options.watchOptions.aggregateTimeout = options.watchDelay;
-			}
 			options.watch = true;
-		}
-
-		if(argv["watch-delay"]) {
-			console.warn("--watch-delay is deprecated: Use '--watch-aggregate-timeout' instead");
-			options.watchOptions = options.watchOptions || {};
-			options.watchOptions.aggregateTimeout = +argv["watch-delay"];
 		}
 
 		if(argv["watch-aggregate-timeout"]) {
@@ -171,6 +161,9 @@ module.exports = function(optimist, argv, convertOptions) {
 	}
 
 	function processOptions(options) {
+		var noOutputFilenameDefined = !options.output || !options.output.filename;
+		new WebpackOptionsDefaulter().process(options);
+
 		function ifArg(name, fn, init, finalize) {
 			if(Array.isArray(argv[name])) {
 				if(init) {
@@ -322,23 +315,17 @@ module.exports = function(optimist, argv, convertOptions) {
 			options.output.path = value;
 		});
 
-		ifArg("output-file", function(value) {
-			console.warn("output.file will be deprecated: Use 'output.filename' instead");
-			ensureObject(options, "output");
-			options.output.filename = value;
-		});
-
 		ifArg("output-filename", function(value) {
 			ensureObject(options, "output");
 			options.output.filename = value;
 		});
 
-		ifArg("output-chunk-file", function(value) {
+		ifArg("output-chunk-filename", function(value) {
 			ensureObject(options, "output");
 			options.output.chunkFilename = value;
 		});
 
-		ifArg("output-source-map-file", function(value) {
+		ifArg("output-source-map-filename", function(value) {
 			ensureObject(options, "output");
 			options.output.sourceMapFilename = value;
 		});
@@ -400,57 +387,6 @@ module.exports = function(optimist, argv, convertOptions) {
 			options.plugins.push(new LoaderOptionsPlugin({
 				debug: true
 			}));
-		});
-
-		ifBooleanArg("progress", function() {
-			var ProgressPlugin = require("../lib/ProgressPlugin");
-			ensureArray(options, "plugins");
-			var chars = 0,
-				lastState, lastStateTime;
-			options.plugins.push(new ProgressPlugin(function(percentage, msg) {
-				var state = msg;
-				if(percentage < 1) {
-					percentage = Math.floor(percentage * 100);
-					msg = percentage + "% " + msg;
-					if(percentage < 100) {
-						msg = " " + msg;
-					}
-					if(percentage < 10) {
-						msg = " " + msg;
-					}
-				}
-				if(options.profile) {
-					state = state.replace(/^\d+\/\d+\s+/, "");
-					if(percentage === 0) {
-						lastState = null;
-						lastStateTime = +new Date();
-					} else if(state !== lastState || percentage === 1) {
-						var now = +new Date();
-						if(lastState) {
-							var stateMsg = (now - lastStateTime) + "ms " + lastState;
-							goToLineStart(stateMsg);
-							process.stderr.write(stateMsg + "\n");
-							chars = 0;
-						}
-						lastState = state;
-						lastStateTime = now;
-					}
-				}
-				goToLineStart(msg);
-				process.stderr.write(msg);
-			}));
-
-			function goToLineStart(nextMessage) {
-				var str = "";
-				for(; chars > nextMessage.length; chars--) {
-					str += "\b \b";
-				}
-				chars = nextMessage.length;
-				for(var i = 0; i < chars; i++) {
-					str += "\b";
-				}
-				if(str) process.stderr.write(str);
-			}
 		});
 
 		ifArg("devtool", function(value) {
@@ -537,7 +473,7 @@ module.exports = function(optimist, argv, convertOptions) {
 
 		mapArgToBoolean("profile");
 
-		if(!options.output || !options.output.filename) {
+		if(noOutputFilenameDefined) {
 			ensureObject(options, "output");
 			if(convertOptions && convertOptions.outputFilename) {
 				options.output.path = path.dirname(convertOptions.outputFilename);
@@ -547,10 +483,11 @@ module.exports = function(optimist, argv, convertOptions) {
 				options.output.path = path.dirname(options.output.filename);
 				options.output.filename = path.basename(options.output.filename);
 			} else if(configFileLoaded) {
-				throw new Error("'output.filename' is required, either in config file or as --output-file");
+				throw new Error("'output.filename' is required, either in config file or as --output-filename");
 			} else {
-				optimist.showHelp();
-				console.error("Output filename not configured.");
+				console.error("No configuration file found and no output filename configured via CLI option.");
+				console.error("A configuration file could be named 'webpack.config.js' in the current directory.");
+				console.error("Use --help to display the CLI options.");
 				process.exit(-1); // eslint-disable-line
 			}
 		}
@@ -587,6 +524,18 @@ module.exports = function(optimist, argv, convertOptions) {
 					addTo(content.substr(0, i), content.substr(i + 1));
 				}
 			});
+		}
+
+		if(!options.entry) {
+			if(configPath) {
+				console.error("Configuration file found but no entry configured.");
+			} else {
+				console.error("No configuration file found and no entry configured via CLI option.");
+				console.error("When using the CLI you need to provide at least two arguments: entry and output.");
+				console.error("A configuration file could be named 'webpack.config.js' in the current directory.");
+			}
+			console.error("Use --help to display the CLI options.");
+			process.exit(-1); // eslint-disable-line
 		}
 	}
 };

@@ -1,7 +1,7 @@
 This example illustrates a very simple case of Code Splitting with `require.ensure`.
 
 * `a` and `b` are required normally via CommonJS
-* `c` is depdended through the `require.ensure` array.
+* `c` is depended through the `require.ensure` array.
   * This means: make it available, but don't execute it
   * webpack will load it on demand
 * `b` and `d` are required via CommonJs in the `require.ensure` callback
@@ -18,7 +18,7 @@ You can see that webpack outputs two files/chunks:
   * the entry point `example.js`
   * module `a`
   * module `b`
-* `1.output.js` is an additional chunk (on demand loaded) and contains
+* `1.js` is an additional chunk (on demand loaded) and contains
   * module `c`
   * module `d`
 
@@ -37,16 +37,16 @@ You can see that chunks are loaded via JSONP. The additional chunks are pretty s
 {{js/output.js}}
 ```
 
-# js/1.output.js
+# js/1.js
 
 ``` javascript
-{{js/1.output.js}}
+{{js/1.js}}
 ```
 
 Minimized
 
 ``` javascript
-{{min:js/1.output.js}}
+{{min:js/1.js}}
 ```
 
 # Info
